@@ -1,106 +1,93 @@
-version: "3.7"
-
 services:
-  kong-database:
-    image: postgres:12
-    container_name: kong-database
-    restart: always
+  kong-db:
+    image: postgres:11-alpine
+    volumes:
+      - db-data-kong-postgres:/var/lib/postgresql/data
+    networks:
+      - kong-net
+    ports:
+      - "15432:5432"
     environment:
+      POSTGRES_DB: kong
       POSTGRES_USER: kong
       POSTGRES_PASSWORD: kong
-      POSTGRES_DB: api_gateway
-    volumes:
-      - kong_data:/var/lib/postgresql/data # 🔹 Persistencia de datos
-    ports:
-      - "5432:5432"
-    networks:
-      - kong-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kong"]
-      interval: 10s
-      retries: 5
-      start_period: 10s
 
-  kong-migrations:
-    image: kong:latest
-    container_name: kong-migrations
-    restart: on-failure
+  kong-migration:
+    image: kong
     depends_on:
-      kong-database:
-        condition: service_healthy
-    environment:
-      KONG_DATABASE: postgres
-      KONG_PG_HOST: kong-database
-      KONG_PG_USER: kong
-      KONG_PG_PASSWORD: kong
-      KONG_PG_DATABASE: api_gateway
-    command: kong migrations bootstrap
+      - kong-db
+    container_name: kong-migration
     networks:
       - kong-net
+    restart: on-failure
+    environment:
+      - KONG_DATABASE=postgres
+      - KONG_PG_HOST=kong-db
+      - KONG_PG_PORT=5432
+      - KONG_PG_DATABASE=kong
+      - KONG_PG_USER=kong
+      - KONG_PG_PASSWORD=kong
+    command: kong migrations bootstrap
 
   kong:
-    image: kong:latest
+    image: kong
     container_name: kong
-    restart: always
-    depends_on:
-      kong-migrations:
-        condition: service_completed_successfully
     environment:
-      KONG_DATABASE: postgres
-      KONG_PG_HOST: kong-database
-      KONG_PG_USER: kong
-      KONG_PG_PASSWORD: kong
-      KONG_PG_DATABASE: api_gateway
-      KONG_PROXY_ACCESS_LOG: /dev/stdout
-      KONG_ADMIN_ACCESS_LOG: /dev/stdout
-      KONG_PROXY_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_LISTEN: 0.0.0.0:8001
-      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      - LC_CTYPE=en_US.UTF-8
+      - LC_ALL=en_US.UTF-8
+      - KONG_DATABASE=postgres
+      - KONG_PG_HOST=kong-db
+      - KONG_PG_PORT=5432
+      - KONG_PG_USER=kong
+      - KONG_PG_PASSWORD=kong
+      - KONG_CASSANDRA_CONTACT_POINTS=kong-db
+      - KONG_PROXY_ACCESS_LOG=/dev/stdout
+      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
+      - KONG_PROXY_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_LISTEN=0.0.0.0:8001, 0.0.0.0:8444 ssl
+    restart: on-failure
     ports:
-      - "8000:8000"
-      - "8443:8443"
-      - "8001:8001"
-      - "8444:8444"
+      - 8000:8000
+      - 8443:8443
+      - 8001:8001
+      - 8444:8444
+    links:
+      - kong-db:kong-db
     networks:
       - kong-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    depends_on:
+      - kong-migration
+
+  konga-db:
+    image: postgres:11-alpine
+    container_name: konga-db
+    restart: always
+    networks:
+      - kong-net
+    environment:
+      POSTGRES_DB: konga
+      POSTGRES_USER: konga
+      POSTGRES_PASSWORD: konga
+    volumes:
+      - db-data-konga:/var/lib/postgresql/data
 
   konga:
     image: pantsel/konga
     container_name: konga
-    restart: always
-    depends_on:
-      kong:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      DB_ADAPTER: postgres
-      DB_HOST: kong-database
-      DB_PORT: 5432
-      DB_USER: kong
-      DB_PASSWORD: kong
-      DB_DATABASE: konga_db
     ports:
-      - "1337:1337"
+      - 1337:1337
+    links:
+      - kong:kong
     networks:
       - kong-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:1337"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+    environment:
+      - NODE_ENV=production
+
+volumes:
+  db-data-kong-postgres:
+  db-data-konga:
 
 networks:
   kong-net:
-    driver: bridge
-
-volumes:
-  kong_data: # 🔹 Persistencia de PostgreSQL
-    driver: local
+    external: false
